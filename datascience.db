@@ -1,0 +1,396 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 12.1 (Ubuntu 12.1-1.pgdg19.10+1)
+-- Dumped by pg_dump version 12.1 (Ubuntu 12.1-1.pgdg19.10+1)
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: housing; Type: SCHEMA; Schema: -; Owner: postgres
+--
+
+CREATE SCHEMA housing;
+
+
+ALTER SCHEMA housing OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: apartment_attrs; Type: TABLE; Schema: housing; Owner: postgres
+--
+
+CREATE TABLE housing.apartment_attrs (
+    area character varying(100),
+    width numeric(22,7),
+    length numeric(22,7),
+    id integer,
+    floor_plan character varying(100),
+    bedroom_num integer
+);
+
+
+ALTER TABLE housing.apartment_attrs OWNER TO postgres;
+
+--
+-- Name: apartment_ids; Type: TABLE; Schema: housing; Owner: postgres
+--
+
+CREATE TABLE housing.apartment_ids (
+    id integer NOT NULL,
+    name character varying(100)
+);
+
+
+ALTER TABLE housing.apartment_ids OWNER TO postgres;
+
+--
+-- Name: apartment_ids_id_seq; Type: SEQUENCE; Schema: housing; Owner: postgres
+--
+
+CREATE SEQUENCE housing.apartment_ids_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE housing.apartment_ids_id_seq OWNER TO postgres;
+
+--
+-- Name: apartment_ids_id_seq; Type: SEQUENCE OWNED BY; Schema: housing; Owner: postgres
+--
+
+ALTER SEQUENCE housing.apartment_ids_id_seq OWNED BY housing.apartment_ids.id;
+
+
+--
+-- Name: apartments; Type: TABLE; Schema: housing; Owner: postgres
+--
+
+CREATE TABLE housing.apartments (
+    name character varying(100),
+    floor_plan character varying(100),
+    advertised_sqft numeric(22,7),
+    rent numeric(22,7),
+    date date,
+    unit character varying(15),
+    source character varying(100),
+    availability_dt date,
+    move_in_date date
+);
+
+
+ALTER TABLE housing.apartments OWNER TO postgres;
+
+--
+-- Name: complex_attrs; Type: TABLE; Schema: housing; Owner: postgres
+--
+
+CREATE TABLE housing.complex_attrs (
+    id integer,
+    city character varying(100)
+);
+
+
+ALTER TABLE housing.complex_attrs OWNER TO postgres;
+
+--
+-- Name: cv_apt; Type: VIEW; Schema: housing; Owner: postgres
+--
+
+CREATE VIEW housing.cv_apt AS
+ WITH apt AS (
+         SELECT t2.id,
+            t1.name,
+            t1.floor_plan,
+            t1.advertised_sqft,
+            t1.rent,
+            t1.move_in_date,
+            t1.availability_dt,
+            t1.date,
+            t1.unit,
+            t1.source
+           FROM (housing.apartments t1
+             LEFT JOIN housing.apartment_ids t2 ON (((t1.name)::text = (t2.name)::text)))
+        )
+ SELECT apt.id,
+    apt.name,
+    apt.floor_plan,
+    apt.advertised_sqft,
+    apt.rent,
+    apt.move_in_date,
+    apt.availability_dt,
+    apt.date,
+    apt.unit,
+    apt.source
+   FROM apt;
+
+
+ALTER TABLE housing.cv_apt OWNER TO postgres;
+
+--
+-- Name: cv_apt_attr_data; Type: VIEW; Schema: housing; Owner: postgres
+--
+
+CREATE VIEW housing.cv_apt_attr_data AS
+ WITH apt_calcs AS (
+         SELECT t1.id,
+            t1.name,
+            t1.floor_plan,
+            t1.advertised_sqft,
+            t1.rent,
+            t1.date,
+            t1.move_in_date,
+            t1.unit,
+            t1.source,
+            t2.area,
+            t2.city,
+            t2.length,
+            t2.width,
+            sum((((t2.width / (12)::numeric) * t2.length) / (12)::numeric)) OVER (PARTITION BY t1.date, t1.unit, t1.move_in_date ORDER BY t1.unit) AS actual_sqft,
+            sum((((t2.width / (12)::numeric) * t2.length) / (12)::numeric)) OVER (PARTITION BY t1.date, t1.unit, t2.area, t1.move_in_date ORDER BY t1.unit) AS area_sqft
+           FROM (housing.cv_apt t1
+             LEFT JOIN ( SELECT x1.area,
+                    x1.width,
+                    x1.length,
+                    x1.id,
+                    x1.floor_plan,
+                    x1.bedroom_num,
+                    x2.city
+                   FROM (housing.apartment_attrs x1
+                     LEFT JOIN housing.complex_attrs x2 ON ((x1.id = x2.id)))) t2 ON (((t1.id = t2.id) AND ((t1.floor_plan)::text = (t2.floor_plan)::text))))
+          ORDER BY t1.date, t1.unit
+        ), pct_sqft AS (
+         SELECT apt_calcs.id,
+            apt_calcs.name,
+            apt_calcs.floor_plan,
+            apt_calcs.advertised_sqft,
+            apt_calcs.rent,
+            apt_calcs.date,
+            apt_calcs.unit,
+            apt_calcs.source,
+            apt_calcs.area,
+            apt_calcs.city,
+            COALESCE((apt_calcs.length / (12)::numeric), sqrt((apt_calcs.advertised_sqft - apt_calcs.actual_sqft))) AS length,
+            COALESCE((apt_calcs.width / (12)::numeric), sqrt((apt_calcs.advertised_sqft - apt_calcs.actual_sqft))) AS width,
+            (apt_calcs.actual_sqft + (apt_calcs.advertised_sqft - apt_calcs.actual_sqft)) AS actual_sqft,
+                CASE
+                    WHEN ((apt_calcs.area)::text = 'unallocated'::text) THEN power(sqrt((apt_calcs.advertised_sqft - apt_calcs.actual_sqft)), (2)::numeric)
+                    ELSE apt_calcs.area_sqft
+                END AS area_sqft,
+                CASE
+                    WHEN ((apt_calcs.area)::text = 'unallocated'::text) THEN (power(sqrt((apt_calcs.advertised_sqft - apt_calcs.actual_sqft)), (2)::numeric) / (apt_calcs.actual_sqft + (apt_calcs.advertised_sqft - apt_calcs.actual_sqft)))
+                    ELSE (apt_calcs.area_sqft / (apt_calcs.actual_sqft + (apt_calcs.advertised_sqft - apt_calcs.actual_sqft)))
+                END AS area_usage
+           FROM apt_calcs
+        )
+ SELECT pct_sqft.id,
+    pct_sqft.name,
+    pct_sqft.floor_plan,
+    pct_sqft.advertised_sqft,
+    pct_sqft.rent,
+    pct_sqft.date,
+    pct_sqft.unit,
+    pct_sqft.source,
+    pct_sqft.area,
+    pct_sqft.city,
+    pct_sqft.length,
+    pct_sqft.width,
+    pct_sqft.actual_sqft,
+    pct_sqft.area_sqft,
+    pct_sqft.area_usage
+   FROM pct_sqft;
+
+
+ALTER TABLE housing.cv_apt_attr_data OWNER TO postgres;
+
+--
+-- Name: apartment_ids id; Type: DEFAULT; Schema: housing; Owner: postgres
+--
+
+ALTER TABLE ONLY housing.apartment_ids ALTER COLUMN id SET DEFAULT nextval('housing.apartment_ids_id_seq'::regclass);
+
+
+--
+-- Data for Name: apartment_attrs; Type: TABLE DATA; Schema: housing; Owner: postgres
+--
+
+COPY housing.apartment_attrs (area, width, length, id, floor_plan, bedroom_num) FROM stdin;
+bedroom	109.0000000	156.0000000	2	A1	1
+living	138.0000000	368.0000000	2	A1	1
+bedroom	136.0000000	137.0000000	2	C2.2	1
+living	144.0000000	356.0000000	2	C2.2	1
+den	82.0000000	118.0000000	2	C2.2	1
+unallocated	\N	\N	2	A1	1
+unallocated	\N	\N	2	C2.2	1
+patio	192.0000000	78.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+master	198.0000000	150.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+living/dining	198.0000000	198.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+cook	120.0000000	138.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+walk-in closet	60.0000000	120.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+restroom	84.0000000	120.0000000	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+unallocated	\N	\N	1	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1
+\.
+
+
+--
+-- Data for Name: apartment_ids; Type: TABLE DATA; Schema: housing; Owner: postgres
+--
+
+COPY housing.apartment_ids (id, name) FROM stdin;
+1	Revere Campbell
+2	Capitol 650
+\.
+
+
+--
+-- Data for Name: apartments; Type: TABLE DATA; Schema: housing; Owner: postgres
+--
+
+COPY housing.apartments (name, floor_plan, advertised_sqft, rent, date, unit, source, availability_dt, move_in_date) FROM stdin;
+Capitol 650	D1.3.1	1075.0000000	3625.0000000	2019-12-16	596	Capitol 650 Website	2018-09-20	2019-12-16
+Capitol 650	D1	1078.0000000	3590.0000000	2019-12-15	151	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	D1.1	1104.0000000	3610.0000000	2019-12-15	351	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	D1.3	1078.0000000	3635.0000000	2019-12-15	388	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	D1.2	1098.0000000	3645.0000000	2019-12-16	418	Capitol 650 Website	2019-11-21	2019-12-16
+Capitol 650	D1.1 FW	1104.0000000	3605.0000000	2019-12-16	383	Capitol 650 Website	2019-02-11	2019-12-16
+Capitol 650	B1	716.0000000	2750.0000000	2019-12-16	191	Capitol 650 Website	2019-09-30	2019-12-16
+Capitol 650	C1.1	727.0000000	2840.0000000	2019-12-16	440	Capitol 650 Website	2019-09-30	2019-12-16
+Capitol 650	D1.1	1104.0000000	3575.0000000	2019-12-16	251	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	B1.0.1	705.0000000	2780.0000000	2019-12-16	109	Capitol 650 Website	2019-09-30	2019-12-16
+Capitol 650	D1.1	1104.0000000	3575.0000000	2019-12-15	251	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	D5	1132.0000000	3630.0000000	2019-12-15	292	Capitol 650 Website	2019-10-23	2019-12-15
+Capitol 650	E3	1344.0000000	4115.0000000	2019-12-16	301	Capitol 650 Website	2019-11-27	2019-12-16
+Capitol 650	D5	1132.0000000	3630.0000000	2019-12-16	292	Capitol 650 Website	2019-10-23	2019-12-16
+Capitol 650	D1.3	1078.0000000	3705.0000000	2019-12-15	378	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	B1.8	768.0000000	2855.0000000	2019-12-16	197	Capitol 650 Website	2018-12-12	2019-12-16
+Capitol 650	D1.2.1	1098.0000000	3635.0000000	2019-12-16	330	Capitol 650 Website	2019-09-10	2019-12-16
+Capitol 650	C1	731.0000000	2815.0000000	2019-12-16	160	Capitol 650 Website	2019-10-31	2019-12-16
+Capitol 650	D1	1078.0000000	3590.0000000	2019-12-16	151	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D1.1 FW	1104.0000000	3705.0000000	2019-12-15	381	Capitol 650 Website	2019-02-11	2019-12-15
+Capitol 650	C1	731.0000000	2880.0000000	2019-12-16	426	Capitol 650 Website	2019-10-31	2019-12-16
+Capitol 650	D1.1 FW	1104.0000000	3595.0000000	2019-12-15	283	Capitol 650 Website	2019-02-11	2019-12-15
+Capitol 650	C1	731.0000000	2845.0000000	2019-12-16	126	Capitol 650 Website	2019-10-31	2019-12-16
+Capitol 650	C2.2	827.0000000	2915.0000000	2019-12-16	180	Capitol 650 Website	2018-09-20	2019-12-16
+Capitol 650	B6	788.0000000	2910.0000000	2019-12-15	406	Capitol 650 Website	2018-09-20	2019-12-15
+Capitol 650	C1	731.0000000	2880.0000000	2019-12-15	426	Capitol 650 Website	2019-10-31	2019-12-15
+Capitol 650	D1.2.3	1096.0000000	3665.0000000	2019-12-16	530	Capitol 650 Website	2019-10-18	2019-12-16
+Capitol 650	D1.3.1	1075.0000000	3625.0000000	2019-12-15	596	Capitol 650 Website	2018-09-20	2019-12-15
+Capitol 650	A1	690.0000000	2790.0000000	2019-12-15	420	Capitol 650 Website	2019-10-09	2019-12-15
+Capitol 650	D2	1265.0000000	3765.0000000	2019-12-16	305	Capitol 650 Website	2019-10-23	2019-12-16
+Capitol 650	D1.2.1	1098.0000000	3605.0000000	2019-12-15	338	Capitol 650 Website	2019-09-10	2019-12-15
+Capitol 650	A1	690.0000000	2720.0000000	2019-12-15	227	Capitol 650 Website	2019-10-09	2019-12-15
+Capitol 650	C1	731.0000000	2845.0000000	2019-12-15	126	Capitol 650 Website	2019-10-31	2019-12-15
+Capitol 650	B6	788.0000000	2910.0000000	2019-12-16	406	Capitol 650 Website	2018-09-20	2019-12-16
+Capitol 650	D2	1265.0000000	3765.0000000	2019-12-15	305	Capitol 650 Website	2019-10-23	2019-12-15
+Capitol 650	D1.3	1078.0000000	3715.0000000	2019-12-16	478	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D1.1	1104.0000000	3675.0000000	2019-12-15	279	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	D1.1	1104.0000000	3610.0000000	2019-12-16	351	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	D1.3	1078.0000000	3705.0000000	2019-12-16	378	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D1.3	1078.0000000	3695.0000000	2019-12-16	278	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D1.1	1104.0000000	3720.0000000	2019-12-15	463	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	B1.0.1	705.0000000	2780.0000000	2019-12-15	109	Capitol 650 Website	2019-09-30	2019-12-15
+Capitol 650	D1.1 FW	1104.0000000	3705.0000000	2019-12-16	381	Capitol 650 Website	2019-02-11	2019-12-16
+Capitol 650	A1	690.0000000	2770.0000000	2019-12-16	489	Capitol 650 Website	2019-11-06	2019-12-16
+Capitol 650	D1.2.3	1096.0000000	3665.0000000	2019-12-15	530	Capitol 650 Website	2019-10-18	2019-12-15
+Capitol 650	D1	1078.0000000	3630.0000000	2019-12-15	179	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	E3	1344.0000000	4115.0000000	2019-12-15	301	Capitol 650 Website	2019-11-27	2019-12-15
+Capitol 650	D1.2.1	1098.0000000	3615.0000000	2019-12-15	438	Capitol 650 Website	2019-09-10	2019-12-15
+Capitol 650	A1	690.0000000	2760.0000000	2019-12-16	512	Capitol 650 Website	2019-11-06	2019-12-16
+Capitol 650	C1.1	727.0000000	2840.0000000	2019-12-15	440	Capitol 650 Website	2019-09-30	2019-12-15
+Capitol 650	A1	690.0000000	2770.0000000	2019-12-15	489	Capitol 650 Website	2019-10-09	2019-12-15
+Capitol 650	D1.3	1078.0000000	3595.0000000	2019-12-15	496	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	D1.1	1104.0000000	3675.0000000	2019-12-16	279	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	D1.1	1104.0000000	3720.0000000	2019-12-16	463	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	C2.2	827.0000000	2915.0000000	2019-12-15	180	Capitol 650 Website	2018-09-20	2019-12-15
+Capitol 650	A1	690.0000000	2760.0000000	2019-12-15	512	Capitol 650 Website	2019-10-09	2019-12-15
+Capitol 650	D1.1	1104.0000000	3675.0000000	2019-12-15	263	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	D1.3	1078.0000000	3595.0000000	2019-12-16	496	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D5	1132.0000000	3670.0000000	2019-12-16	592	Capitol 650 Website	2019-10-23	2019-12-16
+Capitol 650	D1.1 FW	1104.0000000	3605.0000000	2019-12-15	383	Capitol 650 Website	2019-02-11	2019-12-15
+Capitol 650	C1	731.0000000	2815.0000000	2019-12-15	160	Capitol 650 Website	2019-10-31	2019-12-15
+Capitol 650	A1	690.0000000	2720.0000000	2019-12-16	227	Capitol 650 Website	2019-11-06	2019-12-16
+Capitol 650	D5	1132.0000000	3670.0000000	2019-12-15	592	Capitol 650 Website	2019-10-23	2019-12-15
+Capitol 650	D1.1	1104.0000000	3685.0000000	2019-12-16	379	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	A1	690.0000000	2790.0000000	2019-12-16	420	Capitol 650 Website	2019-11-06	2019-12-16
+Capitol 650	D1.3	1078.0000000	3635.0000000	2019-12-16	388	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	D1.1 FW	1104.0000000	3695.0000000	2019-12-15	281	Capitol 650 Website	2019-02-11	2019-12-15
+Capitol 650	D1.2	1098.0000000	3645.0000000	2019-12-15	418	Capitol 650 Website	2019-11-21	2019-12-15
+Capitol 650	D1.1	1104.0000000	3675.0000000	2019-12-16	263	Capitol 650 Website	2019-01-11	2019-12-16
+Capitol 650	A1	690.0000000	2740.0000000	2019-12-15	289	Capitol 650 Website	2019-10-09	2019-12-15
+Capitol 650	D1	1078.0000000	3630.0000000	2019-12-16	179	Capitol 650 Website	2019-01-07	2019-12-16
+Capitol 650	B1	716.0000000	2750.0000000	2019-12-15	191	Capitol 650 Website	2019-09-30	2019-12-15
+Capitol 650	D1.2.1	1098.0000000	3635.0000000	2019-12-15	330	Capitol 650 Website	2019-09-10	2019-12-15
+Capitol 650	D1.1	1104.0000000	3685.0000000	2019-12-15	379	Capitol 650 Website	2019-01-11	2019-12-15
+Capitol 650	D1.1 FW	1104.0000000	3695.0000000	2019-12-16	281	Capitol 650 Website	2019-02-11	2019-12-16
+Capitol 650	D1.2.1	1098.0000000	3605.0000000	2019-12-16	338	Capitol 650 Website	2019-09-10	2019-12-16
+Capitol 650	D1.2.1	1098.0000000	3615.0000000	2019-12-16	438	Capitol 650 Website	2019-09-10	2019-12-16
+Capitol 650	D1.2	1098.0000000	3635.0000000	2019-12-16	318	Capitol 650 Website	2019-11-21	2019-12-16
+Capitol 650	B1.8	768.0000000	2855.0000000	2019-12-15	197	Capitol 650 Website	2018-12-12	2019-12-15
+Capitol 650	D1.3	1078.0000000	3715.0000000	2019-12-15	478	Capitol 650 Website	2019-01-07	2019-12-15
+Capitol 650	D1.2	1098.0000000	3635.0000000	2019-12-15	318	Capitol 650 Website	2019-11-21	2019-12-15
+Capitol 650	D1.3	1078.0000000	3695.0000000	2019-12-15	278	Capitol 650 Website	2019-01-07	2019-12-15
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1218.0000000	4030.0000000	2019-12-16	149	Revere Website	\N	2019-12-16
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-16	445	Revere Website	\N	2019-12-16
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-16	324	Revere Website	\N	2019-12-16
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	1218.0000000	4030.0000000	2019-12-15	149	Revere Website	\N	2019-12-15
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-15	303	Revere Website	\N	2019-12-15
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-16	303	Revere Website	\N	2019-12-16
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-15	445	Revere Website	\N	2019-12-15
+Revere Campbell	Floor Plan : A1 - 1 Bedroom, 1 Bathroom	839.0000000	3620.0000000	2019-12-15	324	Revere Website	\N	2019-12-15
+\.
+
+
+--
+-- Data for Name: complex_attrs; Type: TABLE DATA; Schema: housing; Owner: postgres
+--
+
+COPY housing.complex_attrs (id, city) FROM stdin;
+1	Campbell
+2	milipitas
+\.
+
+
+--
+-- Name: apartment_ids_id_seq; Type: SEQUENCE SET; Schema: housing; Owner: postgres
+--
+
+SELECT pg_catalog.setval('housing.apartment_ids_id_seq', 2, true);
+
+
+--
+-- Name: apartment_ids apartment_ids_pkey; Type: CONSTRAINT; Schema: housing; Owner: postgres
+--
+
+ALTER TABLE ONLY housing.apartment_ids
+    ADD CONSTRAINT apartment_ids_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: complex_attrs complex_attrs_id_fkey; Type: FK CONSTRAINT; Schema: housing; Owner: postgres
+--
+
+ALTER TABLE ONLY housing.complex_attrs
+    ADD CONSTRAINT complex_attrs_id_fkey FOREIGN KEY (id) REFERENCES housing.apartment_ids(id);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
